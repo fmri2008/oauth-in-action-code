@@ -131,16 +131,17 @@ app.get('/fetch_resource', function(req, res) {
 	if (resource.statusCode >= 200 && resource.statusCode < 300) {
 		var body = JSON.parse(resource.getBody());
 		res.render('data', {resource: body});
-		return;
 	} else {
 		/*
 		 * Instead of always returning an error like we do here, refresh the access token if we have a refresh token
 		 */
-		console.log("resource status error code " + resource.statusCode);
-		res.render('error', {error: 'Unable to fetch resource. Status ' + resource.statusCode});
+		access_token = null;
+		if (refresh_token) {
+			refreshAccessToken(req, res);
+		} else {
+			res.render('error', {error: resource.statusCode});
+		}
 	}
-	
-	
 });
 
 var refreshAccessToken = function(req, res) {
@@ -148,7 +149,38 @@ var refreshAccessToken = function(req, res) {
 	/*
 	 * Use the refresh token to get a new access token
 	 */
-	
+	var form_data = qs.stringify({
+		grant_type: 'refresh_token',
+		refresh_token: refresh_token,
+	});
+	var headers = {
+		'Content-Type': 'application/x-www-form-urlencoded',
+		'Authorization': 'Basic ' + encodeClientCredentials(client.client_id, client.client_secret)
+	};
+	var tokRes = request('POST', authServer.tokenEndpoint, {
+		body: form_data,
+		headers: headers
+	});
+	if (tokRes.statusCode >= 200 && tokRes.statusCode < 300) {
+		var body = JSON.parse(tokRes.getBody());
+
+		access_token = body.access_token;
+		console.log('Got access token: %s', access_token);
+		if (body.refresh_token) {
+			refresh_token = body.refresh_token;
+			console.log('Got refresh token: %s', refresh_token);
+		}
+		scope = body.scope;
+		console.log('Got scope: %s', scope);
+
+		// try again
+		res.redirect('/fetch_resource');
+	} else {
+		console.log('No refresh token, asking the user to get a new access token');
+		// tell the user to get a new access token
+		refresh_token = null;
+		res.render('error', {error: 'Unable to refresh token.'});
+	}
 };
 
 var buildUrl = function(base, options, hash) {
