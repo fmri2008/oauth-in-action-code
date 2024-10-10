@@ -30,6 +30,11 @@ var clients = [
   /*
    * Enter client information here
    */
+	{
+		"client_id": "oauth-client-1",
+		"client_secret": "oauth-client-secret-1",
+		"redirect_uris": ["http://localhost:9000/callback"]
+	}
 ];
 
 var codes = {};
@@ -49,7 +54,24 @@ app.get("/authorize", function(req, res){
 	/*
 	 * Process the request, validate the client, and send the user to the approval page
 	 */
-	
+	var client = getClient(req.query.client_id);
+
+	// check if client id is included in the server config
+	if (!client) {
+		res.render('error', {error: 'Unknown client'});
+		return;
+	}
+
+	// check redirect_uri in the request against the one in the server config
+	if (!__.contains(client.redirect_uris, req.query.redirect_uri)) {
+		res.render('error', {error: 'Invalid redirect_uris'});
+		return;
+	}
+
+	var reqid = randomstring.generate(8);
+	requests[reqid] = req.query;
+
+	res.render('approve', {client: client, reqid: reqid});
 });
 
 app.post('/approve', function(req, res) {
@@ -57,7 +79,39 @@ app.post('/approve', function(req, res) {
 	/*
 	 * Process the results of the approval page, authorize the client
 	 */
-	
+	var reqid = req.body.reqid;
+	var query = requests[reqid];
+	delete requests[reqid];
+
+	// check if the request id matches the one generated and saved in the /authorize request
+	if (!query) {
+		res.render('error', {error: 'No matching authorization request'});
+		return;
+	}
+
+	var urlParsed;
+	if (req.body.approve) {
+		if (query.response_type === 'code') {
+			var code = randomstring.generate(8);
+			codes[code] = { request: query };
+
+			urlParsed = buildUrl(query.redirect_uri, {
+				code: code,
+				state: query.state
+			});
+			res.redirect(urlParsed);
+		} else {
+			urlParsed = buildUrl(query.redirect_uri, {
+				error: 'unsupported_response_type'
+			});
+			res.redirect(urlParsed);
+		}
+	} else {
+		urlParsed = buildUrl(query.redirect_uri, {
+			error: 'access_denied'
+		});
+		res.redirect(urlParsed);
+	}
 });
 
 app.post("/token", function(req, res){
@@ -65,7 +119,59 @@ app.post("/token", function(req, res){
 	/*
 	 * Process the request, issue an access token
 	 */
+	var auth = req.headers['authorization'];
+	if (auth) {
+		var clientCredentials = decodeClientCredentials(auth);
+		var clientId = clientCredentials.id;
+		var clientSecret = clientCredentials.secret;
+	}
 
+	if (req.body.client_id) {
+		if (clientId) {
+			res.status(401).json({error: 'invalid_client'});
+			return;
+		}
+		var clientId = req.body.client_id;
+		var clientSecret = req.body.client_secret;
+	}
+
+	var client = getClient(clientId);
+	if (!client) {
+		res.status(401).json({error: 'Unknown client'});
+		return;
+	}
+
+	// client.client_secret is the secret stored in server config; clientSecret is the secret passed from the request.
+	if (client.client_secret != clientSecret) {
+		res.status(401).json({error: 'Invalid client secret'});
+		return;
+	}
+
+	if (req.body.grant_type === 'authorization_code') {
+		var code = codes[req.body.code];
+		if (code) {
+			delete codes[req.body.code];
+			if (code.request.client_id === clientId) {
+				var access_token = randomstring.generate();
+				nosql.insert({
+					access_token: access_token,
+					client_id: clientId
+				});
+
+				var token_response = {
+					access_token: access_token,
+					token_type: 'Bearer'
+				};
+				res.status(200).json(token_response);
+			} else {
+				res.status(400).json({error: 'invalid_grant'});
+			}
+		} else {
+			res.status(400).json({error: 'invalid_grant'});
+		}
+	} else {
+		res.status(400).json({error: 'Invalid grant_type'});
+	}
 });
 
 var buildUrl = function(base, options, hash) {

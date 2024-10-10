@@ -76,7 +76,7 @@ app.get("/callback", function(req, res){
 	}
 	
 	var resState = req.query.state;
-	if (resState == state) {
+	if (resState === state) {
 		console.log('State value matches: expected %s got %s', state, resState);
 	} else {
 		console.log('State DOES NOT MATCH: expected %s got %s', state, resState);
